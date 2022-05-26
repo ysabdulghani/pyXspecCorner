@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import CheckButtons, TextBox
 from astropy.io import fits
 import corner
+import h5py
 
 
 # Use very very small fonts...
@@ -72,14 +73,14 @@ def chButtonsFunc(a):
 
 
 if __name__ == '__main__':
-    '''pyXspecCorner is a CornerPlotter for XSPEC MCMC Chains saved to FITS files'''
+    '''pyXspecCorner is a CornerPlotter for XSPEC MCMC Chains saved to FITS or xspec-emcee HDF5 files'''
 
     # Organize the Parser to get Chain file, burn-in and samples to be used.
     parser = argparse.ArgumentParser(prog='pyXspecCorner',
                                     formatter_class=argparse.ArgumentDefaultsHelpFormatter,
-                                    description='Make interactive CornerPlots based on XSPEC MCMC Chain FITS files.')
+                                    description='Make interactive CornerPlots based on XSPEC MCMC Chain FITS or HDF5 (xspec-emcee) files.')
 
-    parser.add_argument("chain", help="Path to XSPEC Chain FITS file", type=str, default='chain.fits')
+    parser.add_argument("chain", help="Path to XSPEC Chain FITS or HDF5 file", type=str, default='chain.fits')
     parser.add_argument("--burn", help="Samples to Burn In", type=int, default=0, nargs='?')
     parser.add_argument("--samples",help="Samples used in CornerPlot (-1 to use all)", type=int, default=-1, nargs='?')
     parser.add_argument("--bins",help="Number of Bins used in CornerPlot", type=int, default=30, nargs='?')
@@ -95,9 +96,17 @@ if __name__ == '__main__':
     title_fmt = args.format
     labelpad = args.labelpad
 
-    chain = fits.open(chainName)
-    nFields = int(chain[1].header['TFIELDS'])
-    ChainLength = int(chain[1].header['NAXIS2'])
+    chainExt = chainName.split('.')[1] #Get chain file extension
+
+    if chainExt == 'fits':
+        chain = fits.open(chainName)
+        nFields = int(chain[1].header['TFIELDS'])
+        ChainLength = int(chain[1].header['NAXIS2'])
+    elif chainExt == 'hdf5':
+        chain = h5py.File(chainName, 'r')['chain']
+        lnprob= h5py.File(chainName, 'r')['lnprob']
+        nFields = chain.shape[2]
+        ChainLength = chain.shape[0]*chain.shape[1]
 
     if Samples<0:
         Samples = ChainLength
@@ -119,30 +128,38 @@ if __name__ == '__main__':
     # Create the DataFrame for the CornerPlot and fill it with the Data and Titles.
     df = pd.DataFrame()
     titles, ttypes = [], []
+    if chainExt == 'fits':
+        for i in range(nFields):
+            ttype = chain[1].header['TTYPE{}'.format(i+1)]
+            tform = chain[1].header['TFORM{}'.format(i+1)]
+            try:
+                tunit = chain[1].header['TUNIT{}'.format(i+1)]
+            except:
+                tunit = ''
 
-    for i in range(nFields):
-        ttype = chain[1].header['TTYPE{}'.format(i+1)]
-        tform = chain[1].header['TFORM{}'.format(i+1)]
-        try:
-            tunit = chain[1].header['TUNIT{}'.format(i+1)]
-        except:
-            tunit = ''
+            try:
+                tname, tnum = ttype.split('__')
+            except:
+                tnum = str(int(tnum)+1)
+                tname = 'Chi-Squared'
+                tunit = ''
 
-        try:
-            tname, tnum = ttype.split('__')
-        except:
-            tnum = str(int(tnum)+1)
-            tname = 'Chi-Squared'
-            tunit = ''
+            ttypes.append(ttype)
+            if tunit:
+                title = '{}. {} [{}]'.format(tnum,tname,tunit)
+            else:
+                title = '{}. {}'.format(tnum,tname)
 
-        ttypes.append(ttype)
-        if tunit:
-            title = '{}. {} [{}]'.format(tnum,tname,tunit)
-        else:
-            title = '{}. {}'.format(tnum,tname)
+            titles.append(title)
+            df[title] = chain[1].data[ttype][idx]
 
-        titles.append(title)
-        df[title] = chain[1].data[ttype][idx]
+    elif chainExt == 'hdf5':
+        for i in range(nFields):
+            title = 'thawedPar'+str(i+1)
+            titles.append(title)
+            df[title] = chain[:,:,i].flatten()[idx]
+        df['Log-Probability']=lnprob[:,:].flatten()[idx]
+        titles.append('Log-Probability')
 
     # Add some Plotting abilities
     titles.append('Draw Contours')
@@ -177,6 +194,11 @@ if __name__ == '__main__':
         if '.' in AltName:
             axbox = plt.axes([0.55, 0.89-w*i, 0.4, 0.95*w])
             text_box = TextBox(axbox, AltName.split('. ')[0]+'. ', initial=AltName)
+            text_box.on_submit(chTextBoxesFunc)
+            chTextBoxes.append(text_box)
+        elif 'Par' in AltName:
+            axbox = plt.axes([0.55, 0.89-w*i, 0.4, 0.95*w])
+            text_box = TextBox(axbox, AltName.split('Par')[1]+'. ', initial=AltName)
             text_box.on_submit(chTextBoxesFunc)
             chTextBoxes.append(text_box)
 
